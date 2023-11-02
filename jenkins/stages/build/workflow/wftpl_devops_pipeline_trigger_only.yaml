@@ -1,0 +1,68 @@
+metadata:
+  version: "1"
+  dependencies:
+    apps:
+      - id: dynatrace.automations
+        version: ^1.102.0
+  inputs: []
+workflow:
+  title: DevOps Pipeline (Trigger only)
+  tasks:
+    trigger_jenkins_build:
+      name: trigger_jenkins_build
+      description: Build a custom task running js Code
+      action: dynatrace.automations:run-javascript
+      active: true
+      input:
+        script: >-
+          // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+
+          export default async function ({ execution_id }) {
+            const BASE_URL = 'https://myjenkins';
+            const CRUMB_URL = `${BASE_URL}/crumbIssuer/api/xml`;
+            const BUILD_URL = `${BASE_URL}/job/myjob/build`;
+            const JENKINS_USER = 'admin';
+            const JENKINS_API_TOKEN='mytoken';
+
+              let response = await fetch(CRUMB_URL, {
+                headers: {
+                'Authorization': `Basic ${btoa(JENKINS_USER + ':' + JENKINS_API_TOKEN)}`,
+                },
+              });
+              console.log('Response Status:', response.status);
+
+              if (!response.ok) {
+                const responseText = await response.text();
+                throw new Error(`Request failed with status ${response.status}. Response text: ${responseText}`);
+              }
+              const xml = await response.text();
+              const crumb = (xml.match(/<crumb>(.*?)<\/crumb>/) || [])[1];
+
+              response = await fetch(BUILD_URL, {
+                method: "POST",
+                headers: {
+                'Authorization': `Basic ${btoa(JENKINS_USER + ':' + JENKINS_API_TOKEN)}`,
+                'Jenkins-Crumb': crumb  
+                },
+              });
+              console.log('Response Status:', response.status);
+
+              if (!response.ok) {
+                const responseText = await response.text();
+                throw new Error(`Request failed with status ${response.status}. Response text: ${responseText}`);
+              }
+            return { data: crumb };
+          }
+      position:
+        x: 0
+        y: 1
+      predecessors: []
+      conditions:
+        states: {}
+  description: ""
+  trigger: {}
+  schemaVersion: 3
+

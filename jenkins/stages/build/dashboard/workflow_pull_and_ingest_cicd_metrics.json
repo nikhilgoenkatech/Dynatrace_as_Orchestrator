@@ -1,0 +1,43 @@
+{
+  "id": "16145c43-32c8-41ab-ae0c-bc082ff5e321",
+  "title": "Pull & Ingest CI/CD metrics as bizevents",
+  "description": "",
+  "tasks": {
+    "fetch_build_info_push_asbizevents": {
+      "name": "fetch_build_info_push_asbizevents",
+      "description": "Build a custom task running js Code",
+      "action": "dynatrace.automations:run-javascript",
+      "input": {
+        "script": "import { execution } from '@dynatrace-sdk/automation-utils';\nimport { businessEventsClient } from '@dynatrace-sdk/client-classic-environment-v2';\n\n/*Function to pull build data from CICD tool - in this case, Jenkins*/\nexport default async function ( {execution_id} ) {\n  let jenkinsBaseUrl = 'https://myjenkins/';\n  const JENKINS_USER = 'myuser';\n  const JENKINS_API_TOKEN='mytoken';\n  const jobName = 'myjob';\n\n  // Fetch Jenkins crumb\n  const crumbResponse = await fetch(`${jenkinsBaseUrl}/crumbIssuer/api/xml`, {\n    headers: {\n      'Authorization': `Basic ${btoa(JENKINS_USER + ':' + JENKINS_API_TOKEN)}`,\n    },\n  });\n  if (!crumbResponse.ok) {\n    const crumbResponseText = await crumbResponse.text();\n    throw new Error(`Failed to fetch Jenkins crumb. Response status: ${crumbResponse.status}. Response text: ${crumbResponseText}`);\n  }\n  const crumbXml = await crumbResponse.text();\n  const crumb = (crumbXml.match(/<crumb>(.*?)<\\/crumb>/) || [])[1];\n\n  const apiUrl = `${jenkinsBaseUrl}/job/${jobName}/api/json?tree=builds[number,url,timestamp,building,duration,result,actions[causes[*]]]{0,500}`;\n\n  // Fetch builds within the timeframe\n  const buildsResponse = await fetch(apiUrl, {\n    method: 'POST',\n    headers: {\n      'Authorization': `Basic ${btoa(JENKINS_USER + ':' + JENKINS_API_TOKEN)}`,\n      'Jenkins-Crumb': crumb,\n    },\n  });\n\n  if (!buildsResponse.ok) {\n    const buildsResponseText = await buildsResponse.text();\n    throw new Error(`Failed to fetch Jenkins builds. Response status: ${buildsResponse.status}. Response text: ${buildsResponseText}`);\n  }\n  const buildsData = await buildsResponse.json();\n  bizevents(buildsData, jenkinsBaseUrl, JENKINS_USER, JENKINS_API_TOKEN, jobName, crumb);\n}\n\n/*Function to send the build details as bizevents*/\nasync function bizevents ( buildsData, jenkinsBaseUrl, JENKINS_USER, JENKINS_API_TOKEN, jobName, crumb ) {\n    \n  const startTimeEpoch = Date.now() - 60 * 60 * 1000; //5 is the minutes\n  const endTimeEpoch = Date.now();\n\n  const builds=[];\n  // Process each build\n  if (buildsData && buildsData.builds) {\n    for (const build of buildsData.builds) {\n      let buildTimestampEpoch = build.timestamp;\n      if (build.result && (buildTimestampEpoch >= startTimeEpoch && buildTimestampEpoch <= endTimeEpoch)) {\n        builds.push(build.number);\n        const buildNumber = build.number;\n        const buildUrl = build.url;\n        const buildTimestamp = build.timestamp;\n        const buildStatus = build.building ? 'Building' : (build.result === 'SUCCESS' ? 'Success' : 'Failure');\n        const buildDuration = build.duration;\n        const result = build.result;\n        \n        let buildUserId = 'Unknown';\n        let buildUserName = 'NoName';\n        const eventType = 'buildevents';\n        const buildCausesAction = build.actions && build.actions.find((action) => action && action._class === 'hudson.model.CauseAction');\n        const buildCauses = buildCausesAction ? buildCausesAction.causes : [];\n  \n        for (const cause of buildCauses) {\n          if (cause._class === 'hudson.model.Cause$UserIdCause') {\n            buildUserId = cause.userId;\n            buildUserName = cause.userName;\n            break;\n          }\n        }\n        console.log(builds);\n        //Populate bizevents object from buildsData\n        const buildDetail = {\n               \"buildNumber\": buildNumber,\n               \"buildTimestamp\": buildTimestamp,\n               \"status\": buildStatus,\n               \"buildDuration\": buildDuration,\n               \"buildUserId\": buildUserId,\n               \"buildUserName\": buildUserName,\n               \"buildResult\":result,\n               \"event.type\":eventType\n        };\n        businessEventsClient\n        .ingest({\n        body: buildDetail,\n        type: 'application/json',\n     })\n     .then(() => console.log('Event ingested'))\n     .catch((e) => console.error('Failed to ingest event: ' + e));\n\n      }\n    }\n    identifyStageDetailAndPushAsBizevents(builds, jenkinsBaseUrl, JENKINS_USER, JENKINS_API_TOKEN, jobName, crumb);\n  }\n}\n\nasync function identifyStageDetailAndPushAsBizevents(builds, jenkinsBaseUrl, JENKINS_USER, JENKINS_API_TOKEN, jobName, crumb) {\n  console.log(\"in identifyStageDetail\");\n  \n  // Get details of the various stages of the build\n  for (const build of builds) {\n    const apiUrl = `${jenkinsBaseUrl}/job/${jobName}/${build}/wfapi/describe`;\n    console.log(apiUrl);\n    // Fetch builds within the timeframe\n    const buildsResponse = await fetch(apiUrl, {\n      method: 'POST',\n      headers: {\n        'Authorization': `Basic ${btoa(JENKINS_USER + ':' + JENKINS_API_TOKEN)}`,\n        'Jenkins-Crumb': crumb,\n      },\n    });\n\n    if (!buildsResponse.ok) {\n      const buildsResponseText = await buildsResponse.text();\n      throw new Error(`Failed to fetch Jenkins builds. Response status: ${buildsResponse.status}. Response text: ${buildsResponseText}`);\n    }\n    const stagesData = await buildsResponse.json();\n    \n    for (let j = 0; j < stagesData[\"stages\"].length; j++) {\n      const stageDetail = {\n                 \"buildnumber\": stagesData[\"id\"],\n                 \"stagename\": stagesData[\"stages\"][j][\"name\"],\n                 \"status\": stagesData[\"stages\"][j][\"status\"],\n                 \"stageDuration\": stagesData[\"stages\"][j][\"durationMillis\"],\n                 \"pauseInQueueDuration\":stagesData[\"stages\"][j][\"pauseDurationMillis\"],\n                 \"event.type\":\"stageType\"\n        };\n        console.log(\"STAGESDATA\");\n        console.log(stageDetail);\n        businessEventsClient.ingest({\n            body: stageDetail,\n            type: 'application/json',\n      })\n      .then(() => console.log('Event ingested'))\n      .catch((e) => console.error('Failed to ingest event: ' + e));\n    }\n   }\n  }\n"
+      },
+      "position": {
+        "x": 0,
+        "y": 1
+      },
+      "predecessors": []
+    }
+  },
+  "actor": "f0185280-8f86-488c-afca-9759e28359c4",
+  "owner": "f0185280-8f86-488c-afca-9759e28359c4",
+  "ownerType": "USER",
+  "isPrivate": false,
+  "trigger": {
+    "schedule": {
+      "rule": null,
+      "trigger": {
+        "type": "interval",
+        "intervalMinutes": 60
+      },
+      "timezone": "Australia/Sydney",
+      "isActive": true,
+      "isFaulty": false,
+      "nextExecution": "2023-11-02T01:00:00.000Z",
+      "filterParameters": {
+        "earliestStart": "2023-10-10",
+        "earliestStartTime": "00:00"
+      },
+      "inputs": {}
+    }
+  },
+  "schemaVersion": 3
+}
