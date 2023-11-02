@@ -1,4 +1,4 @@
-# Resources for setting up Dynatrace as test stage Orchestrator  
+# Resources for setting up Dynatrace as build stage Orchestrator  
 This folder contains all the inventories required to setup Dynatrace as test stage Orchestrator.  
 
 # Note
