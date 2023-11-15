@@ -1,3 +1,5 @@
+⚠️ Please note contains open source and not being actively maintained or officially maintained.
+
 # Resources for setting up Dynatrace as Orchestrator for Jenkins
 This folder contains all the inventories required to setup Dynatrace as Orchestrator.  
 
